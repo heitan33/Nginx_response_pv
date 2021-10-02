@@ -166,6 +166,7 @@ func main() {
 		}
 		wg.Wait()
 //		*pointResponseTimeList = []float64{}
+		responseTimeList = nil
 		fmt.Println("本次结束")
 	}
 }
