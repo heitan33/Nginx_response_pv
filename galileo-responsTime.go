@@ -55,7 +55,7 @@ func Post(data ,visitUrl string) {
 		if err := recover(); err != nil {
 			fmt.Println(err)
 			return
-	}
+		}
 		fmt.Println("Process panic done Post")
 	}()
 	defer resp.Body.Close()
@@ -88,7 +88,6 @@ func init() {
 				continue
 			} else {
 				fmt.Println(str)
-//				num++
 				properties[strings.Replace(strings.Split(str, ":")[0], " ", "", -1)] = strings.Replace(strings.Split(str, ":")[1], " ", "", -1)
 			}
 		}
@@ -112,7 +111,6 @@ func init() {
 				continue
 			} else {
 				fmt.Println(str)
-//				num++
 				properties[strings.Replace(strings.Split(str, ":")[0], " ", "", -1)] = strings.Replace(strings.Split(str, ":")[1], " ", "", -1)
 			}
 		}
@@ -122,11 +120,11 @@ func init() {
 
 
 type postData struct {
-	ConfigId 		string 		`json:"configId"`
-	MinResponseTime int64		`json:"minResponseTime"`
-	MaxResponseTime	int64		`json:"maxResponseTime"`
-	AvgResponseTime	int64		`json:"avgResponseTime"`
-	ProcessType		string 		`json:"processType"`
+	ConfigId 			string 		`json:"configId"`
+	MinResponseTime 	int64		`json:"minResponseTime"`
+	MaxResponseTime		int64		`json:"maxResponseTime"`
+	AvgResponseTime		int64		`json:"avgResponseTime"`
+	ProcessType			string 		`json:"processType"`
 }
 
 type visitVolume struct {
@@ -145,22 +143,29 @@ func (s FloatSlice) Less(i, j int) bool { return s[i] < s[j] }
 func main() {
 	var config conf
 	var machineId ,logAbsPath string
-	var responseTimeList []float64
+//	var responseTimeList []float64
+//	var pointResponseTimeList *[]float64
+	
+//	pointResponseTimeList = new([]float64)
+//	(*pointResponseTimeList) = make([]float64,20000,20000)
+//	(*pointResponseTimeList)[0] = responseTimeList
+//	pointResponseTimeList = &responseTimeList
+//	*pointResponseTimeList = responseTimeList[:]
+
 	urlConfig := config.getConf()
 	go http.ListenAndServe(":60000", nil)
 	for {
 //		c := make(chan string, 1)
+		responseTimeList := []float64{}
 		wg.Add(num)
 		fmt.Println(properties)
 		for machineId ,logAbsPath = range properties {
 			machineId = strings.TrimSpace(strings.Replace(machineId, "\n", "" ,-1))
 			logAbsPath = strings.TrimSpace(strings.Replace(logAbsPath, "\n", "" ,-1))
-			go tailLog(logAbsPath ,machineId ,urlConfig ,&responseTimeList)
+			go tailLog(logAbsPath ,machineId ,urlConfig ,responseTimeList ,&wg)
 		}
 		wg.Wait()
-//		c <- "stop"
-//		close(c)
-		responseTimeList = []float64{}
+//		*pointResponseTimeList = []float64{}
 		fmt.Println("本次结束")
 	}
 }
@@ -171,7 +176,7 @@ type PostParameter struct {
 	UrlConfig 	*conf
 }	
 
-func tailLog(logAbsPath ,machineId string, urlConfig *conf, responseTimeList *[]float64) {
+func tailLog(logAbsPath ,machineId string, urlConfig *conf, responseTimeList []float64, wg *sync.WaitGroup) {
 	var count int64
 	var lock sync.Mutex
 	var responseTime string
@@ -211,12 +216,19 @@ func tailLog(logAbsPath ,machineId string, urlConfig *conf, responseTimeList *[]
 			}
 			lineDone := strings.TrimSpace(line.Text)
 			responseTime = strings.Split(lineDone ," ")[len(strings.Split(lineDone ," "))-1]
-			responsTimeFloat64 ,_ := strconv.ParseFloat(responseTime ,64)
-			if responsTimeFloat64 != 0 {
+			if responseTime == "0.000" {
+				continue						
+			} else {
+				responsTimeFloat64 ,err := strconv.ParseFloat(responseTime ,64)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
 				lock.Lock()	
-				*responseTimeList = append(*responseTimeList ,responsTimeFloat64)
+				responseTimeList = append(responseTimeList ,responsTimeFloat64)
 				lock.Unlock()
 			}
+
 			if !ok {
 				fmt.Printf("tail file close reopen, filename:%s\n", tails.Filename)
 				continue
@@ -228,32 +240,39 @@ func tailLog(logAbsPath ,machineId string, urlConfig *conf, responseTimeList *[]
     pare.MachineId = machineId
     pare.UrlConfig = urlConfig
 	select {
-	case <- ctx.Done():
-		pare.analysisAndPost(responseTimeList ,count ,processType)
-
-    case <-time.After(time.Duration(time.Second * 62)):
-		pare.analysisAndPost(responseTimeList ,count ,processType)
+		case <- ctx.Done():
+			pare.analysisAndPost(responseTimeList ,count ,processType)
+	
+		case <- time.After(time.Duration(time.Second * 62)):
+			pare.analysisAndPost(responseTimeList ,count ,processType)
 	}
+	defer func() {
+		lock.Lock()
+		responseTimeList = nil
+		lock.Unlock()
+	}()
+	wg.Done()
+	return
 }
 
-func (args PostParameter) analysisAndPost(responseTimeList *[]float64 ,count int64 ,processType string) {
+func (args PostParameter) analysisAndPost(postResponseTimeList []float64 ,count int64 ,processType string) {
     var data postData
     var visitVolumeData visitVolume
     var minResponseTime, avgResponseTime, maxResponseTime int64
 	if strings.Contains(args.LogAbsPath, "error") == false {
 		fmt.Println("--------------------------")
-		fmt.Println(len(*responseTimeList))
-		sort.Sort(FloatSlice(*responseTimeList))
-		if len(*responseTimeList) == 0 {
-			*responseTimeList = append(*responseTimeList ,0)
+		fmt.Println(len(postResponseTimeList))
+		sort.Sort(FloatSlice(postResponseTimeList))
+		if len(postResponseTimeList) == 0 {
+			postResponseTimeList = append(postResponseTimeList ,0)
 		}
-		minResponseTime = int64((*responseTimeList)[0] * 1000)
-		maxResponseTime = int64((*responseTimeList)[len(*responseTimeList)-1] * 1000)
+		minResponseTime = int64((postResponseTimeList)[0] * 1000)
+		maxResponseTime = int64((postResponseTimeList)[len(postResponseTimeList)-1] * 1000)
 		sum := 0.0
-		for _, add := range *responseTimeList {
+		for _, add := range postResponseTimeList {
 		    sum = sum + add
 		}
-		avgRes := float32(float32(sum) / float32(len(*responseTimeList)))
+		avgRes := float32(float32(sum) / float32(len(postResponseTimeList)))
 		avgResponseTimeFloat ,_ := strconv.ParseFloat(fmt.Sprintf("%.3f" ,avgRes), 64)
 		avgResponseTime = int64(avgResponseTimeFloat * 1000)
 		fmt.Println(avgResponseTime)
@@ -275,5 +294,5 @@ func (args PostParameter) analysisAndPost(responseTimeList *[]float64 ,count int
 	visitVolumeDataJsonStr := string(visitVolumeDataJson)
 	fmt.Println(visitVolumeDataJsonStr)
 	Post(visitVolumeDataJsonStr ,args.UrlConfig.VisitUrl)
-	wg.Done()
+	fmt.Println("协程等待退出！")
 }
